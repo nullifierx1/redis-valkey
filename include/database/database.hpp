@@ -76,6 +76,8 @@ public:
     void SetMaxMemory(size_t bytes);
 
 private:
+    friend class DataBaseTestAccess;
+
     /* internal helper-methods */
     const RedisItem* FindItem(const std::string& key) const;
     RedisItem* FindItem(const std::string& key);
