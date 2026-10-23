@@ -246,3 +246,28 @@ TEST(SetCommands, SetCommandOverwritesSetValue) {
     ExpectString(db.Type("set"), "string");
     ExpectString(db.Get("set"), "plain");
 }
+
+TEST(SetEquivalenceClasses, AddDuplicateRemoveMissingAndRemoveLast) {
+    DataBase db;
+    ExpectInteger(db.Sadd("members", Args({"a", "a", "b"})), 2);
+    ExpectInteger(db.Sadd("members", Args({"a"})), 0);
+    ExpectInteger(db.Srem("members", Args({"missing", "a", "a"})), 1);
+    ExpectInteger(db.Scard("members"), 1);
+    ExpectInteger(db.Srem("members", Args({"b"})), 1);
+    ExpectString(db.Type("members"), "none");
+    ExpectArray(db.Smembers("members"), {});
+}
+
+TEST(SetEquivalenceClasses, SetAlgebraCoversEmptySingleAndOverlappingOperands) {
+    DataBase db;
+    ExpectInteger(db.Sadd("left", Args({"a", "b"})), 2);
+    ExpectInteger(db.Sadd("right", Args({"b", "c"})), 2);
+    ExpectArray(db.Sunion(Args({"left"})), {"a", "b"});
+    ExpectArray(db.Sunion(Args({"missing", "missing2"})), {});
+    ExpectArray(db.Sdiff("left", Args({})), {"a", "b"});
+    ExpectArray(db.Sdiff("left", Args({"right"})), {"a"});
+    ExpectArray(db.Sdiff("missing", Args({"right"})), {});
+    ExpectArray(db.Sinter("left", Args({})), {"a", "b"});
+    ExpectArray(db.Sinter("left", Args({"right"})), {"b"});
+    ExpectArray(db.Sinter("left", Args({"missing"})), {});
+}
