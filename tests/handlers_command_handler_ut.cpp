@@ -317,3 +317,22 @@ TEST(CommandHandler, OomErrorIsReturnedThroughCommandHandler) {
     );
     ExpectString(Execute(db, "TYPE key"), "none");
 }
+
+TEST(CommandArgumentEquivalenceClasses, KnownCommandsRejectMissingAndExtraArguments) {
+    Parser parser;
+    CommandHandler handler;
+    DataBase db;
+    const std::vector<std::string> invalid_commands = {
+        "SET", "SET key", "GET", "GET key extra", "STRLEN", "APPEND key",
+        "TYPE", "TYPE key extra", "KEYS", "TTL key extra", "EXPIRE key",
+        "CONFIG SET maxmemory", "CONFIG GET", "LPUSH list", "LLEN list extra",
+        "LINDEX list", "LSET list 0", "LPOP list 0 extra", "LINSERT list BEFORE p",
+        "LRANGE list 0", "SADD set", "SMEMBERS set extra", "SISMEMBER set",
+        "SMOVE a b", "GEOADD geo", "GEOPOS geo", "GEODIST geo a",
+        "GEOSEARCH", "GEOSEARCHSTORE dest source"
+    };
+    for (const auto& line : invalid_commands) {
+        SCOPED_TRACE(line);
+        ExpectError(handler.Execute(db, parser.Parse(line)), "wrong number of arguments");
+    }
+}
