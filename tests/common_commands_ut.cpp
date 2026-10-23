@@ -1,5 +1,6 @@
 #include "result_test_utils.hpp"
 
+#include <commands/common_commands.hpp>
 #include <database/database.hpp>
 
 #include <cstdint>
@@ -279,3 +280,87 @@ TEST(CommonCommands, ConfigSetDoesNotEvictExistingData) {
     ExpectDone(db.ConfigSetMaxMemory(1));
     ExpectString(db.Get("key"), "value");
 }
+
+// Input classes covered here:
+// * unsigned decimal numbers: valid digits, empty, signed, whitespace, non-digit;
+// * memory sizes: bytes/default, supported binary suffixes (case-insensitive),
+//   unknown suffix, missing digits, and arithmetic overflow;
+// * list indexes: zero/positive/negative decimal, empty, sign-only, plus sign,
+//   whitespace, and non-digit.
+namespace {
+
+struct TextExpectation {
+    std::string text;
+    bool valid;
+};
+
+class UnsignedDecimalClasses : public testing::TestWithParam<TextExpectation> {};
+
+TEST_P(UnsignedDecimalClasses, ParseExpireSecondsAcceptsOnlyUnsignedDigits) {
+    const auto parsed = common_detail::ParseSeconds(GetParam().text);
+    EXPECT_EQ(parsed.has_value(), GetParam().valid);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    EquivalenceClasses,
+    UnsignedDecimalClasses,
+    testing::Values(
+        TextExpectation{"0", true},
+        TextExpectation{"42", true},
+        TextExpectation{"", false},
+        TextExpectation{"-1", false},
+        TextExpectation{"+1", false},
+        TextExpectation{" 1", false},
+        TextExpectation{"1 ", false},
+        TextExpectation{"1x", false}
+    )
+);
+
+class MemorySizeClasses : public testing::TestWithParam<TextExpectation> {};
+
+TEST_P(MemorySizeClasses, ParseMemorySizeRecognizesSupportedAndInvalidClasses) {
+    const auto parsed = common_detail::ParseMemorySize(GetParam().text);
+    EXPECT_EQ(parsed.has_value(), GetParam().valid);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    EquivalenceClasses,
+    MemorySizeClasses,
+    testing::Values(
+        TextExpectation{"0", true},
+        TextExpectation{"12", true},
+        TextExpectation{"12b", true},
+        TextExpectation{"2KB", true},
+        TextExpectation{"3Mb", true},
+        TextExpectation{"4gb", true},
+        TextExpectation{"", false},
+        TextExpectation{"kb", false},
+        TextExpectation{"-1", false},
+        TextExpectation{"1.5mb", false},
+        TextExpectation{"1tb", false},
+        TextExpectation{"18446744073709551615gb", false}
+    )
+);
+
+TEST(KeyStateEquivalenceClasses, TypeExistsAndMemoryUsageDistinguishMissingAndStoredKeys) {
+    DataBase db;
+    ExpectString(db.Type("missing"), "none");
+    ExpectInteger(db.Exists(Args({"missing"})), 0);
+    ExpectNil(db.MemoryUsage("missing"));
+
+    ExpectDone(db.Set("string", "value"));
+    ExpectInteger(db.Rpush("list", Args({"value"})), 1);
+    ExpectInteger(db.Sadd("set", Args({"value"})), 1);
+    ExpectInteger(db.Geoadd("geo", Args({"10", "20", "point"})), 1);
+
+    ExpectString(db.Type("string"), "string");
+    ExpectString(db.Type("list"), "list");
+    ExpectString(db.Type("set"), "set");
+    ExpectString(db.Type("geo"), "geo");
+    ExpectInteger(db.Exists(Args({"string", "list", "set", "geo"})), 4);
+    EXPECT_GT(GetInteger(db.MemoryUsage("string")), 0);
+    EXPECT_GT(GetInteger(db.MemoryUsage("list")), 0);
+    EXPECT_GT(GetInteger(db.MemoryUsage("set")), 0);
+    EXPECT_GT(GetInteger(db.MemoryUsage("geo")), 0);
+}
+} // namespace
