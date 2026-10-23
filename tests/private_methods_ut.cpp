@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <regex>
 #include <string>
@@ -17,12 +18,60 @@
 #include <span>
 #include <variant>
 
-#define private public
 #include <database/database.hpp>
-#undef private
 
 #include <commands/common_commands.hpp>
 #include <commands/list_commands.hpp>
+
+class DataBaseTestAccess final : public DataBase {
+public:
+    using DataBase::FindItem;
+    using DataBase::GetOrCreateValue;
+    using DataBase::MakeRegexPattern;
+    using DataBase::NormalizeListIndex;
+    using DataBase::IsExpired;
+    using DataBase::PopOneValue;
+    using DataBase::PopManyValues;
+    using DataBase::EraseListIfEmpty;
+    using DataBase::ItemMemoryUsage;
+    using DataBase::ValuesMemoryUsage;
+    using DataBase::UsedMemory;
+    using DataBase::PossibleToAdd;
+    using DataBase::OomError;
+    using DataBase::data_;
+    using DataBase::max_memory_;
+};
+
+namespace {
+
+template <typename T>
+concept AcceptsNonNegativeDecimal = requires(std::string_view text) {
+    NumberParser::ParseNonNegativeDecimal<T>(text);
+};
+
+template <typename T>
+concept AcceptsSignedDecimal = requires(std::string_view text) {
+    NumberParser::ParseSignedDecimal<T>(text);
+};
+
+static_assert(AcceptsNonNegativeDecimal<int64_t>);
+static_assert(AcceptsNonNegativeDecimal<size_t>);
+static_assert(!AcceptsNonNegativeDecimal<bool>);
+static_assert(!AcceptsNonNegativeDecimal<double>);
+static_assert(!AcceptsNonNegativeDecimal<std::string>);
+static_assert(!AcceptsNonNegativeDecimal<wchar_t>);
+static_assert(!AcceptsNonNegativeDecimal<char8_t>);
+static_assert(!AcceptsNonNegativeDecimal<char16_t>);
+static_assert(!AcceptsNonNegativeDecimal<char32_t>);
+static_assert(!AcceptsNonNegativeDecimal<const int>);
+static_assert(!AcceptsNonNegativeDecimal<volatile int>);
+static_assert(!AcceptsNonNegativeDecimal<int&>);
+static_assert(AcceptsSignedDecimal<int64_t>);
+static_assert(!AcceptsSignedDecimal<size_t>);
+static_assert(!AcceptsSignedDecimal<bool>);
+static_assert(!AcceptsSignedDecimal<double>);
+
+} // namespace
 
 namespace gp_helpers {
 
@@ -60,6 +109,14 @@ TEST(CommonDetail, ParseSecondsRejectsInvalidText) {
     EXPECT_FALSE(common_detail::ParseSeconds("1s").has_value());
 }
 
+TEST(CommonDetail, ParseSecondsRejectsValuesOutsideInt64Range) {
+    EXPECT_EQ(
+        common_detail::ParseSeconds(std::to_string(std::numeric_limits<int64_t>::max())),
+        std::optional<int64_t>(std::numeric_limits<int64_t>::max())
+    );
+    EXPECT_FALSE(common_detail::ParseSeconds("9223372036854775808").has_value());
+}
+
 TEST(CommonDetail, ParseMemorySizeAcceptsPlainBytesAndSuffixes) {
     EXPECT_EQ(common_detail::ParseMemorySize("0"), std::optional<size_t>(0));
     EXPECT_EQ(common_detail::ParseMemorySize("7b"), std::optional<size_t>(7));
@@ -94,6 +151,12 @@ TEST(ListDetail, ParseCountRejectsInvalidCounts) {
     EXPECT_FALSE(list_detail::ParseCount("1x").has_value());
 }
 
+TEST(ListDetail, ParseCountRejectsValuesOutsideSizeTRange) {
+    const auto max_count = std::to_string(std::numeric_limits<size_t>::max());
+    EXPECT_EQ(list_detail::ParseCount(max_count), std::optional<size_t>(std::numeric_limits<size_t>::max()));
+    EXPECT_FALSE(list_detail::ParseCount(max_count + "0").has_value());
+}
+
 TEST(ListDetail, ParseIndexAcceptsPositiveNegativeAndZero) {
     EXPECT_EQ(list_detail::ParseIndex("0"), std::optional<int64_t>(0));
     EXPECT_EQ(list_detail::ParseIndex("12"), std::optional<int64_t>(12));
@@ -105,6 +168,19 @@ TEST(ListDetail, ParseIndexRejectsInvalidIndexes) {
     EXPECT_FALSE(list_detail::ParseIndex("-").has_value());
     EXPECT_FALSE(list_detail::ParseIndex("+1").has_value());
     EXPECT_FALSE(list_detail::ParseIndex("1.5").has_value());
+}
+
+TEST(ListDetail, ParseIndexAcceptsInt64BoundariesAndRejectsOverflow) {
+    EXPECT_EQ(
+        list_detail::ParseIndex(std::to_string(std::numeric_limits<int64_t>::min())),
+        std::optional<int64_t>(std::numeric_limits<int64_t>::min())
+    );
+    EXPECT_EQ(
+        list_detail::ParseIndex(std::to_string(std::numeric_limits<int64_t>::max())),
+        std::optional<int64_t>(std::numeric_limits<int64_t>::max())
+    );
+    EXPECT_FALSE(list_detail::ParseIndex("-9223372036854775809").has_value());
+    EXPECT_FALSE(list_detail::ParseIndex("9223372036854775808").has_value());
 }
 
 TEST(ListDetail, ParseInsertPositionAcceptsOnlyUpperAndLowerCaseWords) {
@@ -241,7 +317,7 @@ TEST(GeoParserHelpers, ParseSearchPrefixRejectsMalformedPrefix) {
 }
 
 TEST(DataBasePrivate, FindItemReturnsExistingItemAndNullForMissing) {
-    DataBase db;
+    DataBaseTestAccess db;
 
     ExpectDone(db.Set("key", "value"));
 
@@ -250,17 +326,17 @@ TEST(DataBasePrivate, FindItemReturnsExistingItemAndNullForMissing) {
 }
 
 TEST(DataBasePrivate, ConstFindItemCleansExpiredItem) {
-    DataBase db;
+    DataBaseTestAccess db;
     ExpectDone(db.Set("key", "value"));
     ExpectInteger(db.Expire("key", 0), 1);
 
-    const DataBase& const_db = db;
+    const DataBaseTestAccess& const_db = db;
     EXPECT_EQ(const_db.FindItem("key"), nullptr);
     EXPECT_EQ(db.data_.count("key"), 0U);
 }
 
 TEST(DataBasePrivate, GetOrCreateValueCreatesRequestedType) {
-    DataBase db;
+    DataBaseTestAccess db;
 
     auto* value = db.GetOrCreateValue<ListValue>("list");
 
@@ -270,7 +346,7 @@ TEST(DataBasePrivate, GetOrCreateValueCreatesRequestedType) {
 }
 
 TEST(DataBasePrivate, GetOrCreateValueReturnsNullForWrongExistingType) {
-    DataBase db;
+    DataBaseTestAccess db;
 
     ExpectDone(db.Set("key", "value"));
 
@@ -279,7 +355,7 @@ TEST(DataBasePrivate, GetOrCreateValueReturnsNullForWrongExistingType) {
 }
 
 TEST(DataBasePrivate, GetOrCreateValueRecreatesExpiredKey) {
-    DataBase db;
+    DataBaseTestAccess db;
 
     ExpectDone(db.Set("key", "value"));
     ExpectInteger(db.Expire("key", 0), 1);
@@ -292,26 +368,26 @@ TEST(DataBasePrivate, GetOrCreateValueRecreatesExpiredKey) {
 }
 
 TEST(DataBasePrivate, MakeRegexPatternTranslatesWildcardsAndEscapesRegexCharacters) {
-    const std::regex wildcard(DataBase::MakeRegexPattern("user:?"));
+    const std::regex wildcard(DataBaseTestAccess::MakeRegexPattern("user:?"));
     EXPECT_TRUE(std::regex_match("user:1", wildcard));
     EXPECT_FALSE(std::regex_match("user:12", wildcard));
 
-    const std::regex literal_dot(DataBase::MakeRegexPattern("file.txt"));
+    const std::regex literal_dot(DataBaseTestAccess::MakeRegexPattern("file.txt"));
     EXPECT_TRUE(std::regex_match("file.txt", literal_dot));
     EXPECT_FALSE(std::regex_match("file-txt", literal_dot));
 }
 
 TEST(DataBasePrivate, NormalizeListIndexHandlesPositiveAndNegativeIndexes) {
-    EXPECT_EQ(DataBase::NormalizeListIndex(0, 3), std::optional<size_t>(0));
-    EXPECT_EQ(DataBase::NormalizeListIndex(2, 3), std::optional<size_t>(2));
-    EXPECT_EQ(DataBase::NormalizeListIndex(-1, 3), std::optional<size_t>(2));
-    EXPECT_EQ(DataBase::NormalizeListIndex(-3, 3), std::optional<size_t>(0));
+    EXPECT_EQ(DataBaseTestAccess::NormalizeListIndex(0, 3), std::optional<size_t>(0));
+    EXPECT_EQ(DataBaseTestAccess::NormalizeListIndex(2, 3), std::optional<size_t>(2));
+    EXPECT_EQ(DataBaseTestAccess::NormalizeListIndex(-1, 3), std::optional<size_t>(2));
+    EXPECT_EQ(DataBaseTestAccess::NormalizeListIndex(-3, 3), std::optional<size_t>(0));
 }
 
 TEST(DataBasePrivate, NormalizeListIndexRejectsOutOfRangeAndEmptyList) {
-    EXPECT_FALSE(DataBase::NormalizeListIndex(0, 0).has_value());
-    EXPECT_FALSE(DataBase::NormalizeListIndex(3, 3).has_value());
-    EXPECT_FALSE(DataBase::NormalizeListIndex(-4, 3).has_value());
+    EXPECT_FALSE(DataBaseTestAccess::NormalizeListIndex(0, 0).has_value());
+    EXPECT_FALSE(DataBaseTestAccess::NormalizeListIndex(3, 3).has_value());
+    EXPECT_FALSE(DataBaseTestAccess::NormalizeListIndex(-4, 3).has_value());
 }
 
 TEST(DataBasePrivate, IsExpiredRecognizesExpiredAndLiveItems) {
@@ -319,8 +395,8 @@ TEST(DataBasePrivate, IsExpiredRecognizesExpiredAndLiveItems) {
     RedisItem expired(Value{StringValue{"value"}});
     expired.expired_at = std::chrono::steady_clock::now() - std::chrono::seconds(1);
 
-    EXPECT_FALSE(DataBase::IsExpired(live));
-    EXPECT_TRUE(DataBase::IsExpired(expired));
+    EXPECT_FALSE(DataBaseTestAccess::IsExpired(live));
+    EXPECT_TRUE(DataBaseTestAccess::IsExpired(expired));
 }
 
 TEST(DataBasePrivate, PopOneValueRemovesFromRequestedSide) {
@@ -328,8 +404,8 @@ TEST(DataBasePrivate, PopOneValueRemovesFromRequestedSide) {
     list.data.push_back("a");
     list.data.push_back("b");
 
-    EXPECT_EQ(DataBase::PopOneValue(list, true), "a");
-    EXPECT_EQ(DataBase::PopOneValue(list, false), "b");
+    EXPECT_EQ(DataBaseTestAccess::PopOneValue(list, true), "a");
+    EXPECT_EQ(DataBaseTestAccess::PopOneValue(list, false), "b");
     EXPECT_TRUE(list.data.empty());
 }
 
@@ -340,7 +416,7 @@ TEST(DataBasePrivate, PopManyValuesRemovesOnlyRequestedCount) {
     list.data.push_back("c");
 
     EXPECT_EQ(
-        DataBase::PopManyValues(list, 2, true),
+        DataBaseTestAccess::PopManyValues(list, 2, true),
         (std::vector<std::string>{"a", "b"})
     );
     ASSERT_EQ(list.data.size(), 1U);
@@ -348,7 +424,7 @@ TEST(DataBasePrivate, PopManyValuesRemovesOnlyRequestedCount) {
 }
 
 TEST(DataBasePrivate, EraseListIfEmptyRemovesOnlyEmptyLists) {
-    DataBase db;
+    DataBaseTestAccess db;
     ExpectInteger(db.Rpush("nonempty", Args({"x"})), 1);
     ExpectInteger(db.Rpush("empty", Args({"x"})), 1);
 
@@ -369,23 +445,23 @@ TEST(DataBasePrivate, ItemMemoryUsageIncludesKeyAndValue) {
     RedisItem item(Value{StringValue{"value"}});
     const std::string long_key(128, 'k');
 
-    EXPECT_GT(DataBase::ItemMemoryUsage("key", item), item.value.index());
-    EXPECT_GT(DataBase::ItemMemoryUsage(long_key, item), DataBase::ItemMemoryUsage("k", item));
+    EXPECT_GT(DataBaseTestAccess::ItemMemoryUsage("key", item), item.value.index());
+    EXPECT_GT(DataBaseTestAccess::ItemMemoryUsage(long_key, item), DataBaseTestAccess::ItemMemoryUsage("k", item));
 }
 
 TEST(DataBasePrivate, ValuesMemoryUsageIsZeroForEmptyInput) {
-    EXPECT_EQ(DataBase::ValuesMemoryUsage({}), 0U);
+    EXPECT_EQ(DataBaseTestAccess::ValuesMemoryUsage({}), 0U);
 }
 
 TEST(DataBasePrivate, ValuesMemoryUsageGrowsWithStoredStrings) {
     auto small = Args({"a"});
     std::vector<std::string> large = {"a", std::string(128, 'x')};
 
-    EXPECT_GT(DataBase::ValuesMemoryUsage(large), DataBase::ValuesMemoryUsage(small));
+    EXPECT_GT(DataBaseTestAccess::ValuesMemoryUsage(large), DataBaseTestAccess::ValuesMemoryUsage(small));
 }
 
 TEST(DataBasePrivate, UsedMemoryGrowsWhenDataIsAdded) {
-    DataBase db;
+    DataBaseTestAccess db;
     const size_t empty_usage = db.UsedMemory();
 
     ExpectDone(db.Set("key", std::string(128, 'x')));
@@ -394,7 +470,7 @@ TEST(DataBasePrivate, UsedMemoryGrowsWhenDataIsAdded) {
 }
 
 TEST(DataBasePrivate, UsedMemoryCleansExpiredKeys) {
-    DataBase db;
+    DataBaseTestAccess db;
     ExpectDone(db.Set("key", "value"));
     ExpectInteger(db.Expire("key", 0), 1);
 
@@ -404,27 +480,27 @@ TEST(DataBasePrivate, UsedMemoryCleansExpiredKeys) {
 }
 
 TEST(DataBasePrivate, WouldExceedMaxMemoryFalseWhenLimitDisabled) {
-    DataBase db;
+    DataBaseTestAccess db;
 
     EXPECT_FALSE(db.PossibleToAdd(1024));
 }
 
 TEST(DataBasePrivate, WouldExceedMaxMemoryDetectsOverLimitWrite) {
-    DataBase db;
+    DataBaseTestAccess db;
     db.max_memory_ = db.UsedMemory();
 
     EXPECT_TRUE(db.PossibleToAdd(1));
 }
 
 TEST(DataBasePrivate, PossibleToAddAllowsZeroBytesEvenAtLimit) {
-    DataBase db;
+    DataBaseTestAccess db;
     db.max_memory_ = db.UsedMemory();
 
     EXPECT_FALSE(db.PossibleToAdd(0));
 }
 
 TEST(DataBasePrivate, PossibleToAddAcceptsExactRemainingCapacity) {
-    DataBase db;
+    DataBaseTestAccess db;
     const size_t used_memory = db.UsedMemory();
     db.max_memory_ = used_memory + 10;
 
@@ -434,7 +510,7 @@ TEST(DataBasePrivate, PossibleToAddAcceptsExactRemainingCapacity) {
 
 TEST(DataBasePrivate, OomErrorMessageMatchesReadme) {
     ExpectError(
-        DataBase::OomError(),
+        DataBaseTestAccess::OomError(),
         "OOM command not allowed when used memory > 'maxmemory'"
     );
 }
