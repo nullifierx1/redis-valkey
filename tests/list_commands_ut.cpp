@@ -1,5 +1,6 @@
 #include "result_test_utils.hpp"
 
+#include <commands/list_commands.hpp>
 #include <database/database.hpp>
 
 #include <gtest/gtest.h>
@@ -242,3 +243,92 @@ TEST(ListCommands, DelRemovesListKey) {
     ExpectInteger(db.Del(Args({"items"})), 1);
     ExpectInteger(db.Llen("items"), 0);
 }
+
+struct TextExpectation {
+    std::string text;
+    bool valid;
+};
+
+class ListCountClasses : public testing::TestWithParam<TextExpectation> {};
+
+TEST_P(ListCountClasses, ParseCountAcceptsUnsignedDecimalValues) {
+    const auto parsed = list_detail::ParseCount(GetParam().text);
+    EXPECT_EQ(parsed.has_value(), GetParam().valid);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    EquivalenceClasses,
+    ListCountClasses,
+    testing::Values(
+        TextExpectation{"0", true},
+        TextExpectation{"17", true},
+        TextExpectation{"", false},
+        TextExpectation{"-1", false},
+        TextExpectation{"+1", false},
+        TextExpectation{" 1", false},
+        TextExpectation{"1x", false}
+    )
+);
+
+class ListIndexClasses : public testing::TestWithParam<TextExpectation> {};
+
+TEST_P(ListIndexClasses, ParseIndexAcceptsSignedByMinusDecimalIndexes) {
+    const auto parsed = list_detail::ParseIndex(GetParam().text);
+    EXPECT_EQ(parsed.has_value(), GetParam().valid);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    EquivalenceClasses,
+    ListIndexClasses,
+    testing::Values(
+        TextExpectation{"0", true},
+        TextExpectation{"17", true},
+        TextExpectation{"-17", true},
+        TextExpectation{"", false},
+        TextExpectation{"-", false},
+        TextExpectation{"+1", false},
+        TextExpectation{" 1", false},
+        TextExpectation{"1x", false}
+    )
+);
+
+TEST(ListInsertPositionEquivalenceClasses, AcceptsUpperAndLowercaseOnly) {
+    EXPECT_EQ(list_detail::ParseInsertPosition("BEFORE"), std::optional<bool>(true));
+    EXPECT_EQ(list_detail::ParseInsertPosition("before"), std::optional<bool>(true));
+    EXPECT_EQ(list_detail::ParseInsertPosition("AFTER"), std::optional<bool>(false));
+    EXPECT_EQ(list_detail::ParseInsertPosition("after"), std::optional<bool>(false));
+    EXPECT_FALSE(list_detail::ParseInsertPosition("Before").has_value());
+    EXPECT_FALSE(list_detail::ParseInsertPosition("").has_value());
+    EXPECT_FALSE(list_detail::ParseInsertPosition("MIDDLE").has_value());
+}
+
+struct ListIndexExpectation {
+    int64_t index;
+    std::optional<std::string> value;
+};
+
+class ListIndexBoundaryClasses : public testing::TestWithParam<ListIndexExpectation> {};
+
+TEST_P(ListIndexBoundaryClasses, LindexDistinguishesValidAndOutOfRangeIndexes) {
+    DataBase db;
+    ExpectInteger(db.Rpush("items", Args({"first", "middle", "last"})), 3);
+    if (GetParam().value.has_value()) {
+        ExpectString(db.Lindex("items", GetParam().index), *GetParam().value);
+    } else {
+        ExpectNil(db.Lindex("items", GetParam().index));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    EquivalenceClasses,
+    ListIndexBoundaryClasses,
+    testing::Values(
+        ListIndexExpectation{0, "first"},
+        ListIndexExpectation{1, "middle"},
+        ListIndexExpectation{2, "last"},
+        ListIndexExpectation{-1, "last"},
+        ListIndexExpectation{-3, "first"},
+        ListIndexExpectation{3, std::nullopt},
+        ListIndexExpectation{-4, std::nullopt}
+    )
+);
