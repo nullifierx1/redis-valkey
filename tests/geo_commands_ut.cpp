@@ -428,3 +428,25 @@ TEST(GeoCommands, DelRemovesGeoKey) {
     ExpectGeoPositions(db.Geopos("geo", Args({"a"})), 1);
     ExpectString(db.Type("geo"), "none");
 }
+
+TEST(GeoEquivalenceClasses, CoordinatesCoverInsideBoundaryAndOutsideClasses) {
+    DataBase db;
+    ExpectInteger(db.Geoadd("geo", Args({
+        "-180", "-85.05112878", "min",
+        "180", "85.05112878", "max"
+    })), 2);
+    ExpectError(db.Geoadd("too_west", Args({"-180.1", "0", "p"})), "invalid longitude or latitude");
+    ExpectError(db.Geoadd("too_north", Args({"0", "85.05112879", "p"})), "invalid longitude or latitude");
+    ExpectString(db.Type("too_west"), "none");
+    ExpectString(db.Type("too_north"), "none");
+}
+
+TEST(GeoEquivalenceClasses, GeoPositionSeparatesKnownUnknownAndMissingKeyMembers) {
+    DataBase db;
+    ExpectInteger(db.Geoadd("geo", Args({"10", "20", "known"})), 1);
+    auto known_and_unknown = ExpectGeoPositions(db.Geopos("geo", Args({"known", "unknown"})), 2);
+    ASSERT_TRUE(known_and_unknown.values[0].has_value());
+    EXPECT_FALSE(known_and_unknown.values[1].has_value());
+    auto missing = ExpectGeoPositions(db.Geopos("missing", Args({"known"})), 1);
+    EXPECT_FALSE(missing.values[0].has_value());
+}
