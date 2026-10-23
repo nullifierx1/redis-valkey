@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <regex>
 #include <string>
@@ -23,6 +24,37 @@
 
 #include <commands/common_commands.hpp>
 #include <commands/list_commands.hpp>
+
+namespace {
+
+template <typename T>
+concept AcceptsNonNegativeDecimal = requires(std::string_view text) {
+    NumberParser::ParseNonNegativeDecimal<T>(text);
+};
+
+template <typename T>
+concept AcceptsSignedDecimal = requires(std::string_view text) {
+    NumberParser::ParseSignedDecimal<T>(text);
+};
+
+static_assert(AcceptsNonNegativeDecimal<int64_t>);
+static_assert(AcceptsNonNegativeDecimal<size_t>);
+static_assert(!AcceptsNonNegativeDecimal<bool>);
+static_assert(!AcceptsNonNegativeDecimal<double>);
+static_assert(!AcceptsNonNegativeDecimal<std::string>);
+static_assert(!AcceptsNonNegativeDecimal<wchar_t>);
+static_assert(!AcceptsNonNegativeDecimal<char8_t>);
+static_assert(!AcceptsNonNegativeDecimal<char16_t>);
+static_assert(!AcceptsNonNegativeDecimal<char32_t>);
+static_assert(!AcceptsNonNegativeDecimal<const int>);
+static_assert(!AcceptsNonNegativeDecimal<volatile int>);
+static_assert(!AcceptsNonNegativeDecimal<int&>);
+static_assert(AcceptsSignedDecimal<int64_t>);
+static_assert(!AcceptsSignedDecimal<size_t>);
+static_assert(!AcceptsSignedDecimal<bool>);
+static_assert(!AcceptsSignedDecimal<double>);
+
+} // namespace
 
 namespace gp_helpers {
 
@@ -60,6 +92,14 @@ TEST(CommonDetail, ParseSecondsRejectsInvalidText) {
     EXPECT_FALSE(common_detail::ParseSeconds("1s").has_value());
 }
 
+TEST(CommonDetail, ParseSecondsRejectsValuesOutsideInt64Range) {
+    EXPECT_EQ(
+        common_detail::ParseSeconds(std::to_string(std::numeric_limits<int64_t>::max())),
+        std::optional<int64_t>(std::numeric_limits<int64_t>::max())
+    );
+    EXPECT_FALSE(common_detail::ParseSeconds("9223372036854775808").has_value());
+}
+
 TEST(CommonDetail, ParseMemorySizeAcceptsPlainBytesAndSuffixes) {
     EXPECT_EQ(common_detail::ParseMemorySize("0"), std::optional<size_t>(0));
     EXPECT_EQ(common_detail::ParseMemorySize("7b"), std::optional<size_t>(7));
@@ -94,6 +134,12 @@ TEST(ListDetail, ParseCountRejectsInvalidCounts) {
     EXPECT_FALSE(list_detail::ParseCount("1x").has_value());
 }
 
+TEST(ListDetail, ParseCountRejectsValuesOutsideSizeTRange) {
+    const auto max_count = std::to_string(std::numeric_limits<size_t>::max());
+    EXPECT_EQ(list_detail::ParseCount(max_count), std::optional<size_t>(std::numeric_limits<size_t>::max()));
+    EXPECT_FALSE(list_detail::ParseCount(max_count + "0").has_value());
+}
+
 TEST(ListDetail, ParseIndexAcceptsPositiveNegativeAndZero) {
     EXPECT_EQ(list_detail::ParseIndex("0"), std::optional<int64_t>(0));
     EXPECT_EQ(list_detail::ParseIndex("12"), std::optional<int64_t>(12));
@@ -105,6 +151,19 @@ TEST(ListDetail, ParseIndexRejectsInvalidIndexes) {
     EXPECT_FALSE(list_detail::ParseIndex("-").has_value());
     EXPECT_FALSE(list_detail::ParseIndex("+1").has_value());
     EXPECT_FALSE(list_detail::ParseIndex("1.5").has_value());
+}
+
+TEST(ListDetail, ParseIndexAcceptsInt64BoundariesAndRejectsOverflow) {
+    EXPECT_EQ(
+        list_detail::ParseIndex(std::to_string(std::numeric_limits<int64_t>::min())),
+        std::optional<int64_t>(std::numeric_limits<int64_t>::min())
+    );
+    EXPECT_EQ(
+        list_detail::ParseIndex(std::to_string(std::numeric_limits<int64_t>::max())),
+        std::optional<int64_t>(std::numeric_limits<int64_t>::max())
+    );
+    EXPECT_FALSE(list_detail::ParseIndex("-9223372036854775809").has_value());
+    EXPECT_FALSE(list_detail::ParseIndex("9223372036854775808").has_value());
 }
 
 TEST(ListDetail, ParseInsertPositionAcceptsOnlyUpperAndLowerCaseWords) {

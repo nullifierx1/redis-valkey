@@ -1,6 +1,7 @@
 #pragma once
 
 #include <commands/command_interface.hpp>
+#include <commands/detail/number_parser.hpp>
 #include <database/database.hpp>
 
 #include <optional>
@@ -13,45 +14,12 @@
 
 namespace list_detail {
 
-inline std::optional<size_t> ParseCount(const std::string& text) {
-    if (text.empty()) return std::nullopt;
-
-    size_t value = 0;
-    for (char ch : text) {
-        if (!std::isdigit(static_cast<unsigned char>(ch))) {
-            return std::nullopt;
-        }
-
-        value = value * 10 + static_cast<size_t>(ch - '0');
-    }
-    return value;
+[[nodiscard]] inline std::optional<size_t> ParseCount(const std::string& text) {
+    return NumberParser::ParseNonNegativeDecimal<size_t>(text);
 }
 
-inline std::optional<int64_t> ParseIndex(const std::string& text) {
-    if (text.empty()) return std::nullopt;
-
-    size_t pos = 0;
-    bool negative = false;
-    if (text[0] == '-') {
-        negative = true;
-        pos = 1;
-    }
-
-    if (pos == text.size()) return std::nullopt;
-
-    int64_t value = 0;
-    for (; pos < text.size(); ++pos) {
-        char ch = text[pos];
-
-        if (!std::isdigit(static_cast<unsigned char>(ch))) {
-            return std::nullopt;
-        }
-
-        value = value * 10 + static_cast<int64_t>(ch - '0');
-    }
-
-    if (negative) value = -value;
-    return value;
+[[nodiscard]] inline std::optional<int64_t> ParseIndex(const std::string& text) {
+    return NumberParser::ParseSignedDecimal<int64_t>(text);
 }
 
 inline std::optional<bool> ParseInsertPosition(const std::string& text) {

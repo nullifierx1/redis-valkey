@@ -1,25 +1,15 @@
 #pragma once
 
 #include <commands/command_interface.hpp>
+#include <commands/detail/number_parser.hpp>
 #include <database/database.hpp>
 
 #include <limits>
 
 namespace common_detail {
 
-inline std::optional<int64_t> ParseSeconds(const std::string& text) {
-    if (text.empty()) return std::nullopt;
-
-    int64_t value = 0;
-    for (char ch : text) {
-        if (!std::isdigit(static_cast<unsigned char>(ch))) {
-            return std::nullopt;
-        }
-
-        value = value * 10 + static_cast<int64_t>(ch - '0');
-    }
-
-    return value;
+[[nodiscard]] inline std::optional<int64_t> ParseSeconds(const std::string& text) {
+    return NumberParser::ParseNonNegativeDecimal<int64_t>(text);
 }
 
 inline std::optional<size_t> ParseMemorySize(const std::string& text) {
